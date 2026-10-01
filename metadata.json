@@ -1,0 +1,7 @@
+{
+  "name": "KolayEmlak",
+  "description": "Saha gayrimenkul danışmanları için sesli not tabanlı akıllı CRM ve otomatik eşleştirme asistanı.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+

@@ -1,0 +1,222 @@
+// prisma/schema.prisma
+// KolayEmlak - Saha Danışmanı Akıllı CRM & Portföy Eşleştirme Veri Tabanı Modeli
+// Veri Tabanı: PostgreSQL
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// -------------------------------------------------------------
+// ENUM TANIMLARI
+// -------------------------------------------------------------
+
+enum LeadStatus {
+  ACTIVE      // Aktif arayışta
+  PENDING     // Değerlendirmede / Askıda
+  COMPLETED   // Satın alma tamamlandı
+  CANCELLED   // Vazgeçti / İptal
+}
+
+enum PropertyStatus {
+  AVAILABLE   // Satılık / Kiralık aktif
+  RESERVED    // Kapora alındı / Rezerv
+  SOLD        // Satıldı
+  RENTED      // Kiraya verildi
+  PASSIVE     // Yayından kaldırıldı
+}
+
+enum ListingType {
+  FOR_SALE    // Satılık
+  FOR_RENT    // Kiralık
+}
+
+enum PropertyType {
+  APARTMENT   // Daire
+  RESIDENCE   // Rezidans
+  VILLA       // Villa / Müstakil
+  COMMERCIAL  // Ticari / Dükkan / Ofis
+  LAND        // Arsa / Tarla
+}
+
+enum PaymentMethod {
+  CASH          // Nakit peşin
+  MORTGAGE      // Konut Kredisi
+  TRADE_IN      // Takas (Araç/Gayrimenkul)
+  INSTALLMENT   // Senet / Taksit
+  UNSPECIFIED   // Belirtilmedi
+}
+
+enum UrgencyLevel {
+  URGENT  // Acil (Bu ay / hemen taşınmalı)
+  HIGH    // Yüksek (1-2 ay içinde)
+  MEDIUM  // Orta (3-6 ay içinde)
+  LOW     // Düşük (Piyasa araştırıyor / yatırımcı)
+}
+
+enum MatchStatus {
+  SUGGESTED       // Algoritma önerdi
+  REVIEWED        // Danışman inceledi & onayladı
+  PRESENTED       // Müşteriye sunuldu (WhatsApp/PDF)
+  APPOINTMENT_SET // Yer gösterme / Randevu alındı
+  OFFER_MADE      // Teklif verildi
+  REJECTED        // Müşteri reddetti
+  CLOSED          // Satışa dönüştü
+}
+
+// -------------------------------------------------------------
+// 1. MÜŞTERİ / TALEP TABLOSU (Leads)
+// Danışmanın sesli notlarından veya görüşmelerinden üretilen talepler
+// -------------------------------------------------------------
+
+model Lead {
+  id                    String        @id @default(uuid()) @db.Uuid
+  fullName              String        @db.VarChar(120) // Ad Soyad
+  phoneNumber           String?       @db.VarChar(30)  // Telefon numarası (opsiyonel kalabilir)
+  email                 String?       @db.VarChar(120) // E-posta
+  status                LeadStatus    @default(ACTIVE)
+
+  // Arayış Kriterleri
+  propertyType          PropertyType  @default(APARTMENT)
+  listingType           ListingType   @default(FOR_SALE)
+  minBudget             Decimal?      @db.Decimal(14, 2) // Min Bütçe (TL)
+  maxBudget             Decimal       @db.Decimal(14, 2) // Max Bütçe (TL)
+  currency              String        @default("TRY") @db.VarChar(5)
+
+  // Lokasyon Tercihleri (Array veya normalize ilişkisel yapı)
+  preferredCities       String[]      @default(["Bursa"])
+  preferredDistricts    String[]      @default([]) // Örn: ["Nilüfer", "Osmangazi"]
+  preferredNeighborhoods String[]     @default([]) // Örn: ["Özlüce", "Balat", "23 Nisan"]
+
+  // Mülk Özellikleri Talebi
+  roomCounts            String[]      @default([]) // Örn: ["3+1", "4+1"]
+  minSquareMeters       Int?                       // Min net/brüt m²
+  paymentMethod         PaymentMethod @default(UNSPECIFIED)
+  urgencyLevel          UrgencyLevel  @default(MEDIUM)
+  targetDate            DateTime?                  // Hedef taşınma / alım tarihi
+
+  // İstenen Özel Nitelikler (Tag array)
+  mustHaveFeatures      String[]      @default([]) // Örn: ["krediye_uygun", "asansor", "site_ici", "otopark"]
+
+  // Sesli Not & Sistem Kaydı
+  rawVoiceMemo          String?       @db.Text    // Danışmanın sesli notunun orijinal dökümü
+  aiSummary             String?       @db.Text    // AI tarafından üretilen özet not
+  missingFields         String[]      @default([]) // Eksik tespit edilen alanlar (örn: "phoneNumber")
+  agentNotes            String?       @db.Text    // Danışmanın eklediği kişisel notlar
+  assignedAgentId       String?       @db.Uuid    // Danışman referansı
+
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+
+  // İlişkiler
+  matches               Match[]
+
+  @@index([status])
+  @@index([urgencyLevel])
+  @@index([maxBudget])
+  @@index([createdAt])
+  @@map("leads")
+}
+
+// -------------------------------------------------------------
+// 2. PORTFÖY / MÜLK TABLOSU (Properties)
+// Danışmanın veya ofisin portföyündeki mülkler
+// -------------------------------------------------------------
+
+model Property {
+  id                  String         @id @default(uuid()) @db.Uuid
+  title               String         @db.VarChar(200) // Başlık (örn: Özlüce 3+1 Havuzlu Site İçi Lüks Daire)
+  description         String?        @db.Text
+  propertyType        PropertyType   @default(APARTMENT)
+  listingType         ListingType    @default(FOR_SALE)
+
+  // Fiyat ve Finans
+  price               Decimal        @db.Decimal(14, 2)
+  currency            String         @default("TRY") @db.VarChar(5)
+  isMortgageEligible  Boolean        @default(true) // Krediye Uygun mu?
+  dues                Decimal?       @db.Decimal(10, 2) // Aidat
+
+  // Lokasyon Bilgileri
+  city                String         @db.VarChar(60) // İl (örn: Bursa)
+  district            String         @db.VarChar(60) // İlçe (örn: Nilüfer)
+  neighborhood        String         @db.VarChar(80) // Mahalle (örn: Özlüce)
+  addressDetail       String?        @db.VarChar(255)
+  latitude            Float?
+  longitude           Float?
+
+  // Mülk Detayları
+  roomCount           String         @db.VarChar(10) // Örn: "3+1"
+  grossSqm            Int                            // Brüt m²
+  netSqm              Int                            // Net m²
+  floorNumber         Int?                           // Bulunduğu Kat
+  totalFloors         Int?                           // Toplam Kat
+  buildingAge         Int            @default(0)     // Bina Yaşı
+  heatingType         String?        @db.VarChar(50) // Doğalgaz Kombi, Yerden Isıtma vs.
+
+  // Donanımlar & Özellikler (Tags)
+  features            String[]       @default([]) // Örn: ["asansor", "otopark", "site_ici", "balkon", "havuz"]
+  images              String[]       @default([]) // Görsel URL'leri
+
+  // Mülk Sahibi İletişim (Sadece danışmana özel, gizli alan)
+  ownerName           String         @db.VarChar(120) // Mülk Sahibi Adı
+  ownerPhone          String         @db.VarChar(30)  // Mülk Sahibi Telefonu
+  ownerNotes          String?        @db.Text         // Pazarlık marjı, komisyon notu
+
+  status              PropertyStatus @default(AVAILABLE)
+  assignedAgentId     String?        @db.Uuid
+
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+
+  // İlişkiler
+  matches             Match[]
+
+  @@index([city, district, neighborhood])
+  @@index([price])
+  @@index([roomCount])
+  @@index([status])
+  @@map("properties")
+}
+
+// -------------------------------------------------------------
+// 3. EŞLEŞME TABLOSU (Matches)
+// Talep ile Portföy arasındaki yapay zeka & kural tabanlı eşleşmeler
+// -------------------------------------------------------------
+
+model Match {
+  id              String       @id @default(uuid()) @db.Uuid
+  leadId          String       @db.Uuid
+  propertyId      String       @db.Uuid
+
+  // Uyum Puanları (0 - 100 Arası)
+  overallScore    Float        // Ağırlıklı Genel Uyum Skoru (0-100)
+  budgetScore     Float        // Bütçe Uyumu (0-100)
+  locationScore   Float        // Lokasyon Uyumu (0-100)
+  roomScore       Float        // Oda Sayısı & Metrekare Uyumu (0-100)
+  featureScore    Float        // Özellik & Kredi Uygunluğu (0-100)
+
+  // Açıklayıcı Analiz (AI ve Kural Motoru Gerekçeleri)
+  reasons         Json         // Pozitif ve negatif gerekçeler: ["Bütçe 6.5M tam aralıkta", "Özlüce tam lokasyon"]
+  missingFeatures String[]     @default([]) // Karşılanamayan beklentiler (örn: "asansör yok")
+
+  // Eşleşme Yaşam Döngüsü
+  status          MatchStatus  @default(SUGGESTED)
+  agentFeedback   String?      @db.Text // Danışmanın notu ("Müşteriye iletildi, pazar günü bakılacak")
+
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  // İlişki Bağlantıları
+  lead            Lead         @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  property        Property     @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+
+  // Bir talep ve portföy çifti sadece bir kez eşleşme kaydına sahip olabilir
+  @@unique([leadId, propertyId])
+  @@index([overallScore])
+  @@index([status])
+  @@map("matches")
+}
